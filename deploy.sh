@@ -30,7 +30,6 @@ function checkInstanceReady {
 
 # Zip up given folder and upload to s3
 function uploadFolderToS3 {
-    echo "uploading: " $1 $2
     rm -rf $1*.zip
     zip -r $2 . -x "*.git*" "node_modules/*"
     aws s3 cp $2 s3://$AWS_BUCKET/$2
