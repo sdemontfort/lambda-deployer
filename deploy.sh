@@ -57,7 +57,8 @@ function buildOnEc2 {
     # Install Node on instance
     ssh -o StrictHostKeyChecking=no ec2-user@$instanceIp "curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.8/install.sh | bash && \
         . ~/.nvm/nvm.sh && \
-        nvm install $NODE_VERSION"
+        nvm install $NODE_VERSION && \
+        sudo yum -y groupinstall 'Development Tools'"
 
     # Download bundle onto instance and install dependencies, then re-upload to s3
     ssh -o StrictHostKeyChecking=no ec2-user@$instanceIp "mkdir -p ~/$namePrefix && cd ~/$namePrefix && \
@@ -66,7 +67,6 @@ function buildOnEc2 {
         npm install && \
         zip -r $deployBundleName . && \
         AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY aws s3 cp $deployBundleName s3://$AWS_BUCKET/$deployBundleName"
-
 }
 
 # Add current ip to default security group, port 22.
