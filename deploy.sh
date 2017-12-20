@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # Use the Amazon Linux AMI 2017.09.1 (HVM).
 AMI_ID="ami-ff4ea59d"
 
@@ -10,13 +11,13 @@ AMI_ID="ami-ff4ea59d"
 # - AWS_BUCKET
 # - AWS_KEY_NAME
 
-index=1
-maxConnectionAttempts=20
-
 # Poll the ssh server every 5 seconds attempting to connect. If no Connection
 # can be made, retry the connection with a maximum number of attempts.
 function checkInstanceReady {
-    while (( $index <= $maxConnectionAttempts ))
+    index=1
+    maxAttempts=20
+
+    while (( $index <= $maxAttempts ))
     do
         ssh -q -o ConnectTimeout=1 -o BatchMode=yes -o StrictHostKeyChecking=no ec2-user@$1 exit
         case $? in
@@ -36,14 +37,36 @@ function uploadFolderToS3 {
 }
 
 function deleteSecurityGroup {
-    deleteSg=$(aws ec2 delete-security-group --group-id ${1})
+    index=1
+    maxAttempts=20
 
-    if [[ $deleteSg == *"An error occurred"* ]]; then
-        echo "Error deleting security group. Retrying..."
-        sleep 1
-        deleteSecurityGroup $1
-    fi
-        echo "Deleted security group: ${sgId}"
+    while (( $index <= $maxAttempts ))
+    do
+        deleteSg=`aws ec2 delete-security-group --group-id ${1} 2>&1`
+        case $? in
+            (0) echo "Deleted security group: ${sgId}"; break ;;
+            (*) echo "Error deleting security group. Retrying...";
+        esac
+        sleep 5
+        ((index+=1))
+    done
+}
+
+function buildOnEc2 {
+    # Instance is ready, so continue.
+    # Install Node on instance
+    ssh -o StrictHostKeyChecking=no ec2-user@$instanceIp "curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.8/install.sh | bash && \
+        . ~/.nvm/nvm.sh && \
+        nvm install $NODE_VERSION"
+
+    # Download bundle onto instance and install dependencies, then re-upload to s3
+    ssh -o StrictHostKeyChecking=no ec2-user@$instanceIp "mkdir -p ~/$namePrefix && cd ~/$namePrefix && \
+        AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY aws s3 cp s3://$AWS_BUCKET/$bundleName $bundleName && \
+        unzip $bundleName -d . && \
+        npm install && \
+        zip -r $deployBundleName . && \
+        AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY aws s3 cp $deployBundleName s3://$AWS_BUCKET/$deployBundleName"
+
 }
 
 # Add current ip to default security group, port 22.
@@ -71,19 +94,9 @@ checkInstanceReady $instanceIp
 
 uploadFolderToS3 "lambda-deployer" $bundleName
 
-# Instance is ready, so continue.
-# Install Node on instance
-ssh -o StrictHostKeyChecking=no ec2-user@$instanceIp "curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.8/install.sh | bash && \
-    . ~/.nvm/nvm.sh && \
-    nvm install $NODE_VERSION"
+echo "Setting up Node and building `node_modules` on instance..."
 
-# Download bundle onto instance and install dependencies, then re-upload to s3
-ssh -o StrictHostKeyChecking=no ec2-user@$instanceIp "mkdir -p ~/$namePrefix && cd ~/$namePrefix && \
-    AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY aws s3 cp s3://$AWS_BUCKET/$bundleName $bundleName && \
-    unzip $bundleName -d . && \
-    npm install && \
-    zip -r $deployBundleName . && \
-    AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY aws s3 cp $deployBundleName s3://$AWS_BUCKET/$deployBundleName"
+buildOnEc2
 
 # Clean up.
 # Terminate the newly created instance and it's security group.
